@@ -29,7 +29,7 @@ import pyqtgraph as pg
 import pyqtgraph.exporters  # noqa: F401  -- registers ImageExporter
 from PySide6.QtCore import (Qt, QThread, Signal, Slot, QRectF, QTimer,
                             QSettings)
-from PySide6.QtGui import QFont, QColor, QBrush, QIcon
+from PySide6.QtGui import QFont, QColor, QBrush, QIcon, QAction, QKeySequence
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QGroupBox, QLabel, QPushButton, QComboBox, QDoubleSpinBox, QSpinBox,
@@ -44,6 +44,7 @@ from config import (APP_NAME, APP_VERSION, APP_REPO, AUDIO_FS, SCAN_FS, BANDS,
                     TUNER_MIN_HZ, TUNER_MAX_HZ, DEFAULT_REC_DIR,
                     DEFAULT_SETTINGS, BUILTIN_PRESETS)
 from dsp import (Demodulator, Deemphasis, FirDecimator, AudioSink, fft_decimate,
+                 decimate_peak,
                  find_signals, channel_snr, suggest_demod, band_label, fmt_age)
 from librtl import RtlSdr, RtlSdrError, device_count, device_name
 import airports
@@ -722,9 +723,12 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("no RTL-SDR found - check the WinUSB driver")
 
         self._build_menus()
+        self._install_shortcuts()
         self._refresh_saved_list()
         self._wire_live_controls()
         self._restore_settings()
+
+        threading.Thread(target=self._prune_caches, daemon=True).start()
 
         self.age_timer = QTimer(self)
         self.age_timer.timeout.connect(self._refresh_ages)
@@ -819,6 +823,7 @@ class MainWindow(QMainWindow):
         self.cb_demod.addItems(["Off", "WFM", "NFM", "AM"])
         ga.addWidget(self.cb_demod, 0, 1)
         self.ck_listen = QCheckBox("Listen" + ("" if _sd else "  (needs sounddevice)"))
+        self.ck_listen.setToolTip("Ctrl+L")
         self.ck_listen.setEnabled(_sd is not None)
         self.ck_listen.setChecked(_sd is not None)
         ga.addWidget(self.ck_listen, 1, 0, 1, 2)
@@ -876,6 +881,7 @@ class MainWindow(QMainWindow):
         gb_run = QGroupBox("Run")
         gr2 = QGridLayout(gb_run)
         self.b_start = QPushButton("Start")
+        self.b_start.setShortcut(QKeySequence("Ctrl+Return"))
         self.b_start.setObjectName("primary")
         self.b_start.clicked.connect(lambda: self.on_start())
         self.b_stop = QPushButton("Stop")
@@ -922,6 +928,7 @@ class MainWindow(QMainWindow):
         gb_find = QGroupBox("Auto-find")
         gf = QGridLayout(gb_find)
         self.b_find = QPushButton("Scan this range for signals")
+        self.b_find.setToolTip("Ctrl+F")
         self.b_find.clicked.connect(self.on_autofind)
         gf.addWidget(self.b_find, 0, 0, 1, 2)
         self.b_find_fm = QPushButton("Find + play the strongest")
@@ -1681,7 +1688,9 @@ class MainWindow(QMainWindow):
         ys = [0.0] * len(xs)
         if self.last_trace is not None:
             F, D = self.last_trace
-            ys = [float(D[int(np.argmin(np.abs(F - f)))]) for f in xs]
+            pos = np.searchsorted(F, xs)            # F is ascending by construction
+            pos = np.clip(pos, 0, len(D) - 1)
+            ys = [float(D[i]) for i in pos]
         self.markers.setData(xs, ys)
 
     @Slot(object)
@@ -1718,8 +1727,7 @@ class MainWindow(QMainWindow):
 
     def on_tune_found(self, item):
         if item is None:
-            QMessageBox.information(self, "Nothing selected",
-                                    "Click a signal in the list first.")
+            self.statusBar().showMessage("Select a signal in the list first", 4000)
             return
         try:
             mhz = float(item.text().split()[0])
@@ -1737,9 +1745,16 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(250, lambda: self.on_start())
 
     # ---------------------------------------------------------- plotting --
+    MAX_PLOT_POINTS = 8192          # a 4K screen has nothing like this many
+    MAX_RECORDING_ROWS = 500        # the log rolls; the WAVs stay on disk
+
     @Slot(object, object)
     def on_spectrum(self, freqs, db):
+        # Keep the full-resolution trace for the cursor and marker lookups,
+        # but never hand more than a screenful to the plot or the waterfall.
         self.last_trace = (freqs, db)
+        if len(db) > self.MAX_PLOT_POINTS:
+            freqs, db = decimate_peak(freqs, db, self.MAX_PLOT_POINTS)
         self.curve.setData(freqs, db)
         if self.ck_peak.isChecked():
             if self.peak_hold is None or len(self.peak_hold) != len(db):
@@ -1755,7 +1770,9 @@ class MainWindow(QMainWindow):
             self.wf = np.full((self.wf_rows, len(db)), float(db.min()), dtype=np.float32)
         self.wf[:-1] = self.wf[1:]
         self.wf[-1] = db
-        lo, hi = np.percentile(self.wf, 5), np.percentile(self.wf, 99.5)
+        # a sample is indistinguishable here and avoids 357 M elements a frame
+        sample = self.wf[::8, ::max(1, self.wf.shape[1] // 2048)]
+        lo, hi = np.percentile(sample, 5), np.percentile(sample, 99.5)
         if hi - lo < 1.0:
             hi = lo + 1.0
         self.wf_img.setImage(self.wf.T, autoLevels=False, levels=(lo, hi))
@@ -1771,7 +1788,7 @@ class MainWindow(QMainWindow):
         txt = f"cursor {p.x()/1e6:11.4f} MHz"
         if self.last_trace is not None:
             F, D = self.last_trace
-            i = int(np.argmin(np.abs(F - p.x())))
+            i = int(np.clip(np.searchsorted(F, p.x()), 0, len(D) - 1))
             lbl = bp.label_for(F[i], self.country())
             txt += f"\ntrace  {F[i]/1e6:11.4f} MHz  {D[i]:7.1f} dB"
             if lbl:
@@ -1820,7 +1837,7 @@ class MainWindow(QMainWindow):
     def on_rec_iq(self, checked):
         if checked and not (self.worker and self.worker.isRunning()):
             self.b_iq.setChecked(False)
-            QMessageBox.information(self, "Not running", "Start acquisition first.")
+            self.statusBar().showMessage("Press Start first, then record", 4000)
             return
         if checked:
             p, _ = QFileDialog.getSaveFileName(self, "Record raw IQ", "capture.bin",
@@ -1836,13 +1853,12 @@ class MainWindow(QMainWindow):
         btn = self.sender() if isinstance(self.sender(), QPushButton) else self.b_wav
         if checked and not (self.worker and self.worker.isRunning()):
             btn.setChecked(False)
-            QMessageBox.information(self, "Not running",
-                                    "Start listening or acquisition first.")
+            self.statusBar().showMessage("Press Start first, then record", 4000)
             return
         if checked and getattr(self.worker, "demod", "Off") == "Off":
             btn.setChecked(False)
-            QMessageBox.information(self, "No demodulator",
-                                    "Choose WFM, NFM or AM before recording audio.")
+            self.statusBar().showMessage(
+                "Choose WFM, NFM or AM before recording audio", 5000)
             return
         if checked:
             default = (f"{self.worker.center/1e6:.4f}MHz.wav"
@@ -1857,7 +1873,7 @@ class MainWindow(QMainWindow):
 
     def on_save_csv(self):
         if self.last_trace is None:
-            QMessageBox.information(self, "Nothing to save", "No trace captured yet.")
+            self.statusBar().showMessage("Nothing to save yet - run a sweep first", 4000)
             return
         p, _ = QFileDialog.getSaveFileName(self, "Save trace", "spectrum.csv", "CSV (*.csv)")
         if not p:
@@ -2034,6 +2050,9 @@ class MainWindow(QMainWindow):
         else:
             ac_cell = "-"
 
+        # the table is a running log; the files themselves are on disk
+        while self.tbl_rec.rowCount() >= self.MAX_RECORDING_ROWS:
+            self.tbl_rec.removeRow(0)
         r = self.tbl_rec.rowCount()
         self.tbl_rec.insertRow(r)
         for c, v in enumerate((datetime.now().strftime("%H:%M:%S"),
@@ -2055,7 +2074,7 @@ class MainWindow(QMainWindow):
         """Show the aircraft sidecar for the selected recording."""
         it = self.tbl_rec.currentItem()
         if it is None:
-            QMessageBox.information(self, "No recording", "Select a recording first.")
+            self.statusBar().showMessage("Select a recording first", 4000)
             return
         path = (it.data(Qt.UserRole) or "") + ".json"
         if not os.path.isfile(path):
@@ -2231,7 +2250,7 @@ class MainWindow(QMainWindow):
     def _open_ac_url(self, which):
         it = self.tbl_ac.currentItem()
         if it is None:
-            QMessageBox.information(self, "No selection", "Select an aircraft row first.")
+            self.statusBar().showMessage("Select an aircraft row first", 4000)
             return
         ac = getattr(self, "_ac_index", {}).get(it.data(Qt.UserRole))
         if ac is None:
@@ -2248,7 +2267,7 @@ class MainWindow(QMainWindow):
     def on_export_aircraft(self):
         idx = getattr(self, "_ac_index", {})
         if not idx:
-            QMessageBox.information(self, "Nothing to export", "No aircraft decoded yet.")
+            self.statusBar().showMessage("No aircraft decoded yet", 4000)
             return
         p, _ = QFileDialog.getSaveFileName(self, "Export aircraft", "aircraft.csv",
                                            "CSV (*.csv)")
@@ -2262,6 +2281,17 @@ class MainWindow(QMainWindow):
                 wr.writerow([a.icao, a.callsign or "", a.country, a.squawk or "", a.altitude,
                              a.speed, a.track, a.vrate, a.lat, a.lon, a.messages])
         self.statusBar().showMessage(f"exported {len(idx)} aircraft to {p}")
+
+    def _prune_caches(self):
+        """Housekeeping at startup, in the background: nothing here is urgent."""
+        try:
+            import tiles as _t
+            removed, freed = _t.prune_cache()
+            if removed:
+                print(f"tile cache: removed {removed} tiles, freed "
+                      f"{freed/1e6:.1f} MB", flush=True)
+        except Exception:
+            pass
 
     def _refresh_ages(self):
         self._refresh_state_pill()
@@ -2356,6 +2386,31 @@ class MainWindow(QMainWindow):
         d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "presets")
         os.makedirs(d, exist_ok=True)
         return d
+
+    def _install_shortcuts(self):
+        """
+        Everything frequent should be reachable without the mouse. Space is
+        the run control because that is what it is on every other transport.
+        """
+        for keys, slot in (
+            ("Space", self._toggle_run),
+            ("Ctrl+F", self.on_autofind),
+            ("Ctrl+R", lambda: self.b_wav.click() if self.b_wav.isEnabled() else None),
+            ("Ctrl+L", lambda: self.ck_listen.setChecked(not self.ck_listen.isChecked())),
+            ("Ctrl+1", lambda: self.tabs.setCurrentIndex(0)),
+            ("Ctrl+2", lambda: self.tabs.setCurrentIndex(1)),
+            ("Esc", self.on_stop),
+        ):
+            act = QAction(self)
+            act.setShortcut(QKeySequence(keys))
+            act.triggered.connect(slot)
+            self.addAction(act)
+
+    def _toggle_run(self):
+        if self.b_stop.isEnabled():
+            self.on_stop()
+        elif self.b_start.isEnabled():
+            self.on_start()
 
     def _build_menus(self):
         mb = self.menuBar()

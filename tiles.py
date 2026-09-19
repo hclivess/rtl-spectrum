@@ -12,6 +12,7 @@ infrastructure and the usage policies ask for exactly that.
 """
 import os
 import math
+import time
 import threading
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -122,6 +123,82 @@ def zoom_for(view_width_deg, widget_px, max_zoom):
         return 3
     z = math.log2(widget_px * 360.0 / (TILE_PX * view_width_deg))
     return max(0, min(max_zoom, int(round(z))))
+
+
+CACHE_BUDGET_MB = 200
+CACHE_MAX_AGE_DAYS = 60
+
+
+def prune_cache(budget_mb=CACHE_BUDGET_MB, max_age_days=CACHE_MAX_AGE_DAYS):
+    """
+    Keep the tile cache from growing without limit.
+
+    Panning around at high zoom writes thousands of small files, and a tile of
+    somewhere you looked at once two months ago is worth nothing. Drop
+    anything past its age, then the least recently used until the cache fits
+    its budget. Deleted tiles simply download again if they are wanted.
+    """
+    if not os.path.isdir(CACHE_DIR):
+        return 0, 0
+    now = time.time()
+    cutoff = now - max_age_days * 86400
+    files, total = [], 0
+    for root, _dirs, names in os.walk(CACHE_DIR):
+        for n in names:
+            p = os.path.join(root, n)
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            files.append((st.st_mtime, st.st_size, p))
+            total += st.st_size
+
+    removed = freed = 0
+    keep = []
+    for mtime, size, p in files:
+        if mtime < cutoff:
+            try:
+                os.remove(p)
+                removed += 1
+                freed += size
+                total -= size
+            except OSError:
+                pass
+        else:
+            keep.append((mtime, size, p))
+
+    budget = budget_mb * 1024 * 1024
+    if total > budget:
+        keep.sort()                                  # oldest touched first
+        for mtime, size, p in keep:
+            if total <= budget:
+                break
+            try:
+                os.remove(p)
+                removed += 1
+                freed += size
+                total -= size
+            except OSError:
+                pass
+
+    for root, dirs, names in os.walk(CACHE_DIR, topdown=False):
+        if not dirs and not names and root != CACHE_DIR:
+            try:
+                os.rmdir(root)
+            except OSError:
+                pass
+    return removed, freed
+
+
+def cache_size_mb():
+    total = 0
+    for root, _dirs, names in os.walk(CACHE_DIR):
+        for n in names:
+            try:
+                total += os.path.getsize(os.path.join(root, n))
+            except OSError:
+                pass
+    return total / 1e6
 
 
 def _decode(data):

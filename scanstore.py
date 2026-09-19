@@ -20,15 +20,20 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 STORE = os.path.join(DATA_DIR, "scans.json")
 TRACE_POINTS = 2048
 MAX_SCANS = 20
+MAX_AGE_DAYS = 120
 
 
 def _read():
     try:
         with open(STORE, "r", encoding="utf-8") as fh:
             data = json.load(fh)
-        return data if isinstance(data, list) else []
     except (OSError, ValueError):
         return []
+    if not isinstance(data, list):
+        return []
+    # a scan from four months ago describes a band that has since changed
+    cutoff = time.time() - MAX_AGE_DAYS * 86400
+    return [s for s in data if s.get("when", 0) >= cutoff]
 
 
 def _write(scans):

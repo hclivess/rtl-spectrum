@@ -98,6 +98,29 @@ class FirDecimator:
         return x
 
 
+def decimate_peak(freqs, db, max_points):
+    """
+    Thin a trace for display, keeping the peak of each bin.
+
+    A full 24-1766 MHz sweep is about 1.5 million points. Handing that to a
+    plot widget and a waterfall means a 1.4 GB array and seconds of work per
+    frame. Taking the maximum within each output bin - rather than a stride,
+    which steps straight over narrow carriers - keeps every signal visible at
+    a fraction of the cost.
+    """
+    n = len(db)
+    if n <= max_points or max_points < 2:
+        return freqs, db
+    edges = np.linspace(0, n, max_points + 1).astype(np.int64)
+    lo, hi = edges[:-1], edges[1:]
+    keep = hi > lo
+    lo, hi = lo[keep], hi[keep]
+    idx = np.empty(len(lo), dtype=np.int64)
+    for i, (a, b) in enumerate(zip(lo, hi)):
+        idx[i] = a + int(np.argmax(db[a:b]))
+    return np.asarray(freqs)[idx], np.asarray(db)[idx]
+
+
 def design_bandpass(lo, hi, ntaps):
     """Windowed-sinc band-pass; cutoffs in cycles/sample (0 .. 0.5)."""
     n = np.arange(ntaps) - (ntaps - 1) / 2.0

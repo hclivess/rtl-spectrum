@@ -47,15 +47,15 @@ QGroupBox::title {{
     padding: 0 6px;
     color: {ACCENT};
     font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
+    font-weight: 600;
 }}
 
 QPushButton {{
     background: {PANEL_HI};
     border: 1px solid {BORDER};
     border-radius: 7px;
-    padding: 7px 10px;
+    padding: 7px 12px;
+    min-height: 16px;
     color: {TEXT};
     font-weight: 600;
 }}
@@ -76,8 +76,14 @@ QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit {{
     background: {PANEL_HI};
     border: 1px solid {BORDER};
     border-radius: 6px;
-    padding: 5px 7px;
+    padding: 6px 8px;
+    min-height: 16px;
     selection-background-color: {ACCENT_DIM};
+}}
+/* keyboard focus has to be visible, not implied */
+QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QLineEdit:focus,
+QPushButton:focus, QListWidget:focus, QTableWidget:focus {{
+    border: 1px solid {ACCENT};
 }}
 QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover {{ border-color: {ACCENT_DIM}; }}
 QComboBox::drop-down {{ border: none; width: 18px; }}
@@ -123,11 +129,9 @@ QHeaderView::section {{
     color: {MUTED};
     border: none;
     border-bottom: 1px solid {BORDER};
-    padding: 6px 8px;
+    padding: 7px 8px;
     font-weight: 600;
-    text-transform: uppercase;
-    font-size: 10px;
-    letter-spacing: 0.6px;
+    font-size: 11px;
 }}
 QTableWidget::item {{ padding: 4px 6px; }}
 QListWidget::item {{ padding: 4px 6px; border-radius: 4px; }}
@@ -217,8 +221,8 @@ class Collapsible(QWidget):
         self.button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.button.setStyleSheet(
             f"QToolButton {{ background: transparent; border: none; color: {MUTED};"
-            f" font-weight: 600; font-size: 11px; text-transform: uppercase;"
-            f" letter-spacing: 1px; padding: 4px 2px; }}"
+            f" font-weight: 600; font-size: 11px;"
+            f" padding: 5px 2px; }}"
             f"QToolButton:hover {{ color: {ACCENT}; }}")
         self.button.clicked.connect(self._toggle)
         lay.addWidget(self.button)
