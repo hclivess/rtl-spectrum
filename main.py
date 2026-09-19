@@ -44,7 +44,7 @@ from config import (APP_NAME, APP_VERSION, APP_REPO, AUDIO_FS, SCAN_FS, BANDS,
                     TUNER_MIN_HZ, TUNER_MAX_HZ, DEFAULT_REC_DIR,
                     DEFAULT_SETTINGS, BUILTIN_PRESETS)
 from dsp import (Demodulator, Deemphasis, FirDecimator, AudioSink, fft_decimate,
-                 decimate_peak,
+                 decimate_peak, classify_audio,
                  find_signals, channel_snr, suggest_demod, band_label, fmt_age)
 from librtl import RtlSdr, RtlSdrError, device_count, device_name
 import airports
@@ -371,6 +371,7 @@ class ScannerWorker(QThread):
         self.min_len = 0.7
         self.skip_spurs = True
         self.monitor = True
+        self.voice_only = True        # a dead carrier is not worth a file
         self._learned_spurs = []
         self._last_spec = 0.0
         self._mon_dm = None
@@ -406,14 +407,32 @@ class ScannerWorker(QThread):
     def stop(self):
         self._run = False
 
+    def guard_hz(self):
+        """
+        A channel triggers on anything inside its +/-8 kHz measurement window,
+        and the grid can place a channel up to half a step away from the spur
+        itself. On the 8.333 kHz airband grid a fixed 6 kHz guard let the
+        120.000 MHz clock harmonic through at 120.0119.
+        """
+        return max(self.SPUR_GUARD, 8000.0 + self.step / 2.0)
+
     def is_spur(self, freq):
         if not self.skip_spurs:
             return False
+        guard = self.guard_hz()
         for clk in self.SPUR_CLOCKS:
             n = round(freq / clk)
-            if n >= 1 and abs(freq - n * clk) <= self.SPUR_GUARD:
+            if n >= 1 and abs(freq - n * clk) <= guard:
                 return True
-        return any(abs(freq - f) <= self.SPUR_GUARD for f in self._learned_spurs)
+        return any(abs(freq - f) <= guard for f in self._learned_spurs)
+
+    def _discard(self, path, freq, why):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        self.logline.emit(f"{datetime.now():%H:%M:%S}  drop  {freq/1e6:9.4f} MHz  "
+                          f"({why})")
 
     def _learn_spur(self, freq, why):
         if not any(abs(freq - f) <= self.SPUR_GUARD for f in self._learned_spurs):
@@ -549,6 +568,7 @@ class ScannerWorker(QThread):
                           f"{band_label(freq)}")
         try:
             dm = Demodulator(SCAN_FS, self.demod)
+            heard = []
             while self._run:
                 aud = dm(iq, normalise=False)
                 if len(aud):
@@ -556,6 +576,8 @@ class ScannerWorker(QThread):
                     if peak > 1e-9:
                         aud = aud / max(peak, 0.05) * 0.6
                     fh.writeframes((aud * 32767).astype(np.int16).tobytes())
+                    if sum(len(x) for x in heard) < AUDIO_FS * 30:
+                        heard.append(aud.copy())
                     self.audio.emit(aud)
                 iq = self._read(sdr, blk)
                 s = channel_snr(iq, SCAN_FS)
@@ -591,15 +613,24 @@ class ScannerWorker(QThread):
                 self.nowPlaying.emit(0.0)
                 return
             self.nowPlaying.emit(0.0)
+            kind, voice, mod = ("short", 0.0, 0.0)
+            if heard:
+                kind, voice, mod = classify_audio(np.concatenate(heard))
+
             if dur < self.min_len:
-                try: os.remove(path)
-                except OSError: pass
-                self.logline.emit(f"{datetime.now():%H:%M:%S}  drop  {freq/1e6:9.4f} MHz  "
-                                  f"({dur:.1f}s, too short)")
+                self._discard(path, freq, f"{dur:.1f}s, too short")
+            elif self.voice_only and kind in ("carrier", "short"):
+                # an unmodulated carrier holds the squelch open and says
+                # nothing; keeping it just fills the folder
+                self._discard(path, freq,
+                              f"{kind}, mod {mod:.2f} - nothing was said")
+                if kind == "carrier" and dur > 8.0:
+                    self._learn_spur(freq, f"carrier for {dur:.0f}s, mod {mod:.2f}")
             else:
                 self.recorded.emit(path, freq, dur)
-                self.logline.emit(f"{datetime.now():%H:%M:%S}  SAVED {freq/1e6:9.4f} MHz  "
-                                  f"{dur:5.1f}s  {os.path.basename(path)}")
+                self.logline.emit(
+                    f"{datetime.now():%H:%M:%S}  SAVED {freq/1e6:9.4f} MHz  "
+                    f"{dur:5.1f}s  {kind}  {os.path.basename(path)}")
 
 
 # ---------------------------------------------------------- ADS-B work -----
@@ -856,6 +887,12 @@ class MainWindow(QMainWindow):
         self.sp_minlen.setValue(0.7)
         self.sp_minlen.setSingleStep(0.1)
         gs.addWidget(self.sp_minlen, 3, 1)
+        self.ck_voice = QCheckBox("Keep only recordings with speech in them")
+        self.ck_voice.setChecked(True)
+        self.ck_voice.setToolTip(
+            "Judges each capture when it ends: an unmodulated carrier or a "
+            "burst of data is deleted, speech is kept")
+        gs.addWidget(self.ck_voice, 8, 0, 1, 2)
         self.ck_spurs = QCheckBox("Skip dongle spurs (24 / 28.8 MHz harmonics)")
         self.ck_spurs.setChecked(True)
         self.ck_spurs.setToolTip("120.000 MHz is 24 MHz x 5 - a permanent internal "
@@ -1548,6 +1585,8 @@ class MainWindow(QMainWindow):
             lambda v: self._set_scanner("min_len", v))
         self.ck_spurs.toggled.connect(
             lambda v: self._set_scanner("skip_spurs", v))
+        self.ck_voice.toggled.connect(
+            lambda v: self._set_scanner("voice_only", v))
 
     def _set_scanner(self, attr, value):
         if self.scanner and self.scanner.isRunning():
@@ -1922,6 +1961,7 @@ class MainWindow(QMainWindow):
         s.device = self.cb_dev.currentData() or 0
         s.out_dir = self._outdir
         s.skip_spurs = self.ck_spurs.isChecked()
+        s.voice_only = self.ck_voice.isChecked()
         s.activity.connect(self.on_scan_activity)
         s.logline.connect(lambda t: self._log(self.txt_log, t))
         s.recorded.connect(self.on_scan_recorded)
@@ -2327,6 +2367,7 @@ class MainWindow(QMainWindow):
             "hang_s": self.sp_hang,
             "min_len_s": self.sp_minlen,
             "skip_spurs": self.ck_spurs,
+            "voice_only": self.ck_voice,
             "adsb_device": self.cb_adev,
             "rx_lat": self.sp_rxlat,
             "rx_lon": self.sp_rxlon,
@@ -2465,7 +2506,10 @@ class MainWindow(QMainWindow):
 
     def _load_builtin(self, name):
         self.apply_settings({**DEFAULT_SETTINGS, **BUILTIN_PRESETS[name]})
-        self.statusBar().showMessage(f"preset: {name}")
+        what = ("scan and record every channel that opens" if self.scanning()
+                else "sweep the range" if self.rb_range.isChecked()
+                else f"listen on {self.sp_center.value():.4f} MHz")
+        self.statusBar().showMessage(f"{name} loaded - press Start to {what}")
 
     def _load_preset(self, name):
         path = os.path.join(self._preset_dir(), name + ".json")

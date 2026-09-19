@@ -47,6 +47,7 @@ DEFAULT_SETTINGS = {
     "hang_s": 2.0,
     "min_len_s": 0.7,
     "skip_spurs": True,
+    "voice_only": True,
     "output_dir": DEFAULT_REC_DIR,
     "adsb_device": 0,
     "rx_lat": 50.0,
@@ -67,7 +68,7 @@ BUILTIN_PRESETS = {
     },
     "Airband scan + record": {
         "mode": "range", "auto_record": True, "start_mhz": 118.0, "stop_mhz": 137.0,
-        "demod": "AM", "scan_step_khz": "25", "squelch_db": 8.0,
+        "demod": "AM", "scan_step_khz": "8.333", "squelch_db": 8.0,
         "hang_s": 2.0, "skip_spurs": True,
     },
     "Whole-band survey": {

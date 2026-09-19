@@ -121,6 +121,45 @@ def decimate_peak(freqs, db, max_points):
     return np.asarray(freqs)[idx], np.asarray(db)[idx]
 
 
+def classify_audio(aud, fs=AUDIO_FS):
+    """
+    Decide what a capture actually contains: speech, data, or a dead carrier.
+
+    Two numbers separate them. `voice` is how much energy sits in the speech
+    band, and `mod` is how much the envelope moves at a syllabic rate. An
+    unmodulated carrier barely moves (mod near 0); packet data slams between
+    full scale and nothing (mod well above 1); speech sits in between, which
+    is what makes the pair usable rather than either alone.
+
+    Returns (kind, voice_fraction, modulation).
+    """
+    aud = np.asarray(aud, dtype=np.float32)
+    if len(aud) < fs // 4:
+        return "short", 0.0, 0.0
+    n = len(aud)
+    spec = np.abs(np.fft.rfft(aud * np.hanning(n))) ** 2
+    freqs = np.fft.rfftfreq(n, 1.0 / fs)
+    total = spec[(freqs >= 100) & (freqs <= 20000)].sum()
+    voice = spec[(freqs >= 300) & (freqs <= 3400)].sum() / max(total, 1e-20)
+
+    win = max(fs // 20, 1)                      # 50 ms, a syllabic timescale
+    k = n // win
+    if k < 4:
+        return "short", float(voice), 0.0
+    env = np.sqrt((aud[:k * win].reshape(k, win) ** 2).mean(axis=1))
+    mod = float(env.std() / max(env.mean(), 1e-9))
+
+    if mod < 0.20:
+        kind = "carrier"
+    elif mod > 1.05:
+        kind = "data"
+    elif voice > 0.55 and mod > 0.30:
+        kind = "voice"
+    else:
+        kind = "unclear"
+    return kind, float(voice), mod
+
+
 def design_bandpass(lo, hi, ntaps):
     """Windowed-sinc band-pass; cutoffs in cycles/sample (0 .. 0.5)."""
     n = np.arange(ntaps) - (ntaps - 1) / 2.0
