@@ -1,0 +1,23 @@
+venv/
+__pycache__/
+*.pyc
+build/
+dist/
+output/
+data/tiles/
+presets/*.json
+recordings/
+*.spec
+
+# work products, never the repo's business
+*.bin
+*.csv
+*.part
+
+# images and audio are ignored by default; the few we ship are named
+*.png
+*.wav
+!thumb.png
+!icon.png
+!docs/*.png
+!samples/demo-am-tone.wav
