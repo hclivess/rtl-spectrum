@@ -350,6 +350,7 @@ class ScannerWorker(QThread):
     nowPlaying = Signal(float)
     audio = Signal(object)
     spectrum = Signal(object, object)        # the slice or channel on screen
+    sweepState = Signal(float, float, float)  # best chan, its snr, slice centre
     marks = Signal(object)                   # [(freq_hz, snr_db), ...]
 
     # The dongle generates its own carriers: harmonics of the 28.8 MHz
@@ -515,6 +516,15 @@ class ScannerWorker(QThread):
                                            db.astype(np.float32))
                         self.marks.emit([(float(c), float(v))
                                          for c, v in zip(chans, snr) if v >= 3.0])
+
+                    # report the strongest channel we would actually act on:
+                    # a blocked spur shown as the best signal is a lie
+                    order = np.argsort(snr)[::-1]
+                    best_i = next((int(i) for i in order
+                                   if not self.is_spur(float(chans[i]))),
+                                  int(order[0]))
+                    self.sweepState.emit(float(chans[best_i]), float(snr[best_i]),
+                                         float(fc))
 
                     # monitor: hear the band while it hunts, not only during a
                     # capture. The channel is mixed down from the slice we
@@ -911,6 +921,11 @@ class MainWindow(QMainWindow):
         self.bar_snr.setRange(0, 40)
         self.bar_snr.setFormat("%v dB over floor")
         gs.addWidget(self.bar_snr, 7, 0, 1, 2)
+        self.lbl_strongest = QLabel("")
+        self.lbl_strongest.setFont(QFont("Consolas", 9))
+        self.lbl_strongest.setStyleSheet(f"color: {theme.MUTED};")
+        self.lbl_strongest.setWordWrap(True)
+        gs.addWidget(self.lbl_strongest, 9, 0, 1, 2)
         self.sec_scan = theme.Collapsible("Scanner options", self.gb_scan)
         pl.addWidget(self.sec_scan)
 
@@ -1971,6 +1986,8 @@ class MainWindow(QMainWindow):
         s.nowPlaying.connect(self.on_scan_now)
         s.audio.connect(self.on_audio)
         s.spectrum.connect(self.on_spectrum)
+        s.sweepState.connect(self.on_sweep_state)
+        self._scan_best = (0.0, 0.0)
         s.marks.connect(self.on_scan_marks)
         s.monitor = self.ck_listen.isChecked()
         s.finished.connect(self._scan_finished)
@@ -1995,10 +2012,37 @@ class MainWindow(QMainWindow):
         self.lbl_now.setText("idle")
         self.lbl_now.setStyleSheet(f"color: {theme.MUTED};")
         self.bar_snr.setValue(0)
+        if hasattr(self, "lbl_strongest"):
+            best_snr, best_f = getattr(self, "_scan_best", (0.0, 0.0))
+            if best_snr > 0:
+                self.lbl_strongest.setText(
+                    "nothing opened the squelch\n"
+                    f"strongest was {best_f/1e6:.4f} MHz at {best_snr:.1f} dB")
         self._refresh_state_pill()
 
     def on_scan_activity(self, freq, snr):
         self.bar_snr.setValue(int(max(0, min(40, snr))))
+
+    @Slot(float, float, float)
+    def on_sweep_state(self, freq, snr, slice_centre):
+        """
+        Show the strongest channel of each slice whether or not it opens the
+        squelch. A quiet band is a legitimate answer and it should look like
+        one, rather than like a scanner that has stopped.
+        """
+        self.bar_snr.setValue(int(max(0, min(40, snr))))
+        best_snr, best_f = getattr(self, "_scan_best", (0.0, 0.0))
+        if snr > best_snr:
+            self._scan_best = (snr, freq)
+            best_snr, best_f = snr, freq
+        sq = self.sp_squelch.value()
+        gap = sq - snr
+        self.lbl_strongest.setText(
+            f"at {slice_centre/1e6:8.3f} MHz  strongest {freq/1e6:9.4f} "
+            f"{snr:5.1f} dB"
+            + (f"  ({gap:.1f} dB below squelch)" if gap > 0 else "  OPEN")
+            + (f"\nbest this run  {best_f/1e6:9.4f}  {best_snr:5.1f} dB"
+               if best_snr > 0 else ""))
 
     @Slot(object)
     def on_scan_marks(self, hits):
