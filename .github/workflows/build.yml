@@ -45,6 +45,8 @@ jobs:
           fi
 
       - name: Build with PyInstaller
+        env:
+          QT_QPA_PLATFORM: offscreen
         shell: bash
         env:
           # Set these two repository secrets to ship a signed Windows build. Without them the build is

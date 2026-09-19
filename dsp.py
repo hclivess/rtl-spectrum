@@ -98,6 +98,66 @@ class FirDecimator:
         return x
 
 
+def design_bandpass(lo, hi, ntaps):
+    """Windowed-sinc band-pass; cutoffs in cycles/sample (0 .. 0.5)."""
+    n = np.arange(ntaps) - (ntaps - 1) / 2.0
+    h = (2 * hi * np.sinc(2 * hi * n) - 2 * lo * np.sinc(2 * lo * n))
+    h *= np.hamming(ntaps)
+    # normalise to unity gain at the middle of the passband
+    mid = (lo + hi) / 2.0
+    gain = np.abs((h * np.exp(-2j * np.pi * mid * n)).sum())
+    if gain > 1e-9:
+        h = h / gain
+    return h.astype(np.float32)
+
+
+class FirFilter:
+    """Streaming FIR with carried tail, so blocks join without a seam."""
+
+    def __init__(self, taps):
+        self.h = np.asarray(taps, dtype=np.float32)
+        self.tail = np.zeros(len(self.h) - 1, dtype=np.float32)
+
+    def __call__(self, x):
+        x = np.asarray(x, dtype=np.float32)
+        buf = np.concatenate([self.tail, x])
+        if len(buf) < len(self.h):
+            self.tail = buf
+            return x[:0]
+        y = np.convolve(buf, self.h, mode="valid")
+        self.tail = buf[-(len(self.h) - 1):].copy()
+        return y.astype(np.float32)
+
+
+class Agc:
+    """
+    Slow automatic gain with a ceiling.
+
+    Normalising each block to its own peak is what makes a quiet band as loud
+    as speech: silence gets multiplied up until the hiss is at full scale.
+    Capping the gain keeps the noise floor down where it belongs and still
+    brings a weak transmission up.
+    """
+
+    def __init__(self, target=0.30, max_gain=25.0, attack=0.15, release=0.008):
+        self.target = target
+        self.max_gain = max_gain
+        self.attack = attack
+        self.release = release
+        self.env = 0.0
+        self.gain = 1.0
+
+    def __call__(self, x):
+        if not len(x):
+            return x
+        peak = float(np.abs(x).max())
+        a = self.attack if peak > self.env else self.release
+        self.env = (1 - a) * self.env + a * peak
+        want = self.target / max(self.env, 1e-5)
+        self.gain = min(want, self.max_gain)
+        return np.clip(x * self.gain, -1.0, 1.0).astype(np.float32)
+
+
 class Demodulator:
     """Stateful demodulation chain: decimators, discriminator and de-emphasis."""
 
@@ -110,9 +170,21 @@ class Demodulator:
         else:
             self.d1 = FirDecimator(max(int(fs // AUDIO_FS), 1))
             self.d2 = None
-        self.deemph = Deemphasis()
+        # NFM broadcast carries 750 us pre-emphasis; without the matching
+        # de-emphasis the top of the band is lifted and it hisses.
+        self.deemph = Deemphasis(tau=50e-6 if mode == "WFM" else 750e-6)
         self.prev = None            # last IQ sample, for discriminator continuity
         self.dc = 0.0
+
+        # Audio-band filter. Voice needs 300-3400 Hz; everything above that in
+        # a 24 kHz-wide output is hiss and nothing else.
+        if mode == "WFM":
+            self.post = FirFilter(design_bandpass(30.0 / AUDIO_FS,
+                                                  15000.0 / AUDIO_FS, 127))
+        else:
+            self.post = FirFilter(design_bandpass(300.0 / AUDIO_FS,
+                                                  3400.0 / AUDIO_FS, 255))
+        self.agc = Agc(max_gain=40.0 if mode == "AM" else 25.0)
 
     def _discriminate(self, x):
         if len(x) == 0:
@@ -140,10 +212,11 @@ class Demodulator:
             return np.zeros(0, dtype=np.float32)
 
         aud = np.asarray(aud, dtype=np.float32)
+        if self.mode != "WFM":
+            aud = self.deemph(aud)
+        aud = self.post(aud)
         if normalise:
-            peak = float(np.abs(aud).max()) if len(aud) else 0.0
-            if peak > 1e-9:
-                aud = aud / peak * 0.7
+            aud = self.agc(aud)
         return aud
 
 

@@ -46,6 +46,7 @@ from config import (APP_NAME, APP_VERSION, APP_REPO, AUDIO_FS, SCAN_FS, BANDS,
 from dsp import (Demodulator, Deemphasis, FirDecimator, AudioSink, fft_decimate,
                  find_signals, channel_snr, suggest_demod, band_label, fmt_age)
 from librtl import RtlSdr, RtlSdrError, device_count, device_name
+import airports
 import bandplan as bp
 from adsb import AdsbDecoder
 from worldmap import MapWidget, radio_horizon_km
@@ -921,6 +922,11 @@ class MainWindow(QMainWindow):
         self.b_find_fm = QPushButton("Find + play the strongest")
         self.b_find_fm.clicked.connect(self.on_find_and_play)
         gf.addWidget(self.b_find_fm, 1, 0, 1, 2)
+        self.b_airports = QPushButton("Airport frequencies near me")
+        self.b_airports.setToolTip("Published tower, ground, approach and ATIS "
+                                   "frequencies, so there is nothing to hunt for")
+        self.b_airports.clicked.connect(self.on_airport_freqs)
+        gf.addWidget(self.b_airports, 4, 0, 1, 2)
         self.lst_found = QListWidget()
         self.lst_found.setFont(QFont("Consolas", 9))
         self.lst_found.setMinimumHeight(110)
@@ -1511,6 +1517,50 @@ class MainWindow(QMainWindow):
         self.lst_found.clear()
         self.statusBar().showMessage("scanning for signals...")
         self.on_start(find_mode=True)
+
+    def on_airport_freqs(self):
+        """
+        List the published frequencies of nearby airports instead of scanning
+        for them. Sweeping a 19 MHz band finds a channel only while somebody
+        is talking on it; the published list is there whether or not they are.
+        """
+        lat, lon = self.sp_rxlat.value(), self.sp_rxlon.value()
+        if not airports.cached():
+            ok = QMessageBox.question(
+                self, "Download airport data",
+                "Airport frequencies come from the public-domain OurAirports "
+                "dataset, about 12 MB to fetch and 2.4 MB once cached.\n\n"
+                "Download it now?",
+                QMessageBox.Yes | QMessageBox.No)
+            if ok != QMessageBox.Yes:
+                return
+            self.b_airports.setEnabled(False)
+            try:
+                airports.download(progress=self.statusBar().showMessage)
+            except Exception as exc:
+                QMessageBox.warning(self, "Download failed",
+                                    f"Could not fetch the airport data:\n{exc}")
+                return
+            finally:
+                self.b_airports.setEnabled(True)
+
+        rows = airports.channels_near(lat, lon, radius_km=150.0,
+                                      max_airports=12, limit=80)
+        self.lst_found.clear()
+        self.markers.setData([], [])
+        if not rows:
+            QMessageBox.information(
+                self, "Nothing within range",
+                f"No airport with a published frequency within 150 km of "
+                f"{lat:.4f}, {lon:.4f}.\n\nSet your position on the Aircraft tab.")
+            return
+        for mhz, label, dist in rows:
+            self.lst_found.addItem(f"{mhz:9.4f} MHz  {dist:4.0f} km  {label}")
+        self.lst_found.setCurrentRow(0)
+        self.cb_demod.setCurrentText("AM")
+        self.statusBar().showMessage(
+            f"{len(rows)} published frequencies within 150 km of "
+            f"{lat:.4f}, {lon:.4f} - double-click one to tune it")
 
     def on_find_and_play(self):
         self._play_after_find = True

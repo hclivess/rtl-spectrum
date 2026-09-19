@@ -114,7 +114,11 @@ def pyinstaller_command() -> list:
         # "--collect-all=faster_whisper", "--collect-all=ctranslate2", "--collect-all=onnxruntime",
         # "--collect-all=cv2", "--collect-all=cryptography", "--collect-all=pydub",
         *metadata_flags("numpy", "packaging", "typing_extensions"),
-        "--collect-all=pyqtgraph",
+        # NOT --collect-all=pyqtgraph: that enumerates pyqtgraph.examples,
+        # which builds Qt widgets at import and aborts on a headless runner.
+        "--exclude-module=pyqtgraph.examples",
+        "--exclude-module=pyqtgraph.opengl",
+        "--exclude-module=pyqtgraph.canvas",
         f"--add-data={os.path.join(ROOT, 'data', 'countries-110m.json')}"
         f"{os.pathsep}data",
         f"--add-data={os.path.join(ROOT, 'samples')}{os.pathsep}samples",

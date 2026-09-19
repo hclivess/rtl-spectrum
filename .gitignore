@@ -21,3 +21,4 @@ recordings/
 !icon.png
 !docs/*.png
 !samples/demo-am-tone.wav
+data/airport-frequencies.json
