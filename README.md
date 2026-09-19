@@ -5,6 +5,10 @@ a spectrum, unattended voice recordings, or aircraft on a map.
 
 ![rtl-spectrum](thumb.png)
 
+Live FM broadcast band, peak hold on the trace and the waterfall running underneath:
+
+![live spectrum and waterfall](docs/live.gif)
+
 Broadcasters moved to DVB-T2 and the cheap RTL2832U sticks stopped receiving
 television. The DVB-T demodulator in them cannot be upgraded — that is a
 different chip, not a firmware level — but the tuner still hands over raw IQ
@@ -71,13 +75,32 @@ the app, or point the environment variables below at them.
 | Group | What matters |
 |---|---|
 | **What to do** | Listen / Sweep / Scan — the fields below change to match |
-| **Frequency** | one frequency, or a range; band presets; the selected band is named under them |
-| **Audio** | WFM / NFM / AM, Listen, peak hold |
-| **Scanner** | channel step, squelch dB, hang time, discard-under, skip dongle spurs, output folder |
-| **Receiver** | sample rate, gain, **ppm**, FFT size, which dongle |
+| **Frequency** | one frequency, or a range; a country band plan with named channels; the selected band is named beneath |
+| **Audio** | WFM / NFM / AM, and Listen |
+| **Scanner options** | channel step (**8.333 kHz** for European airband), squelch dB, hang time, discard-under, skip dongle spurs, output folder |
+| **Receiver** | sample rate, gain, **ppm**, FFT size, peak hold, which dongle |
 | **Auto-find** | scan the current range and list carriers with their band |
 | **Record** | audio WAV, raw IQ, trace CSV, chart PNG |
 | **Aircraft** | your position for range rings and distance, map source, dark basemap, which dongle |
+
+### Band plans
+
+24 countries across the three ITU regions. The selection drives frequency
+labelling, the jump list and the automatic demodulator: FM is **76-95 MHz in
+Japan**, licence-free UHF differs everywhere, and the UK warns that listening
+beyond broadcast and amateur is an offence there.
+
+The same dropdown carries **named channels** — pick one and it tunes straight
+to it. The Czech entries (Praha ATIS, TOWER, GROUND, APPROACH and all fifteen
+Praha Radar sector frequencies) and the licence-free VO-R allocations come
+from [kmitocty.cz](https://www.kmitocty.cz/vzdusne-prostory-cr-a-komunikacni-frekvence/)
+and its [list of general authorisations](https://www.kmitocty.cz/vseobecna-opravneni/).
+The official source for Czech airspace is the
+[VFR manual at aim.rlp.cz](https://aim.rlp.cz).
+
+Start with an **ATIS**: it is a looped recording transmitting continuously, so
+it tells you whether your antenna can hear the airband at all, which a sector
+frequency that is merely quiet cannot.
 
 Presets: four built-ins (FM radio, Airband scan + record, Whole-band survey,
 Aircraft), plus save / load / delete / import / export and *save current as
@@ -153,6 +176,13 @@ No dongle required; exit 0 only if actual output was produced.
 ## Changes in 1.0
 
 - First release, built to the [hclivess house standard](https://github.com/hclivess/beautiful-software).
+- Radio tab merges listening, sweeping and scanning: one frequency control,
+  one demodulator, one Start. Everything not needed to press Start sits behind
+  a disclosure.
+- Band plans for 24 countries, with named channels per country.
+- Recordings carry an aircraft sidecar (`<file>.wav.json`). With one dongle the
+  two modes cannot run together, so it records the data's age; with a second
+  dongle selected on each tab they run at once and the link is live.
 
 ## Legality
 

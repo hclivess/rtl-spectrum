@@ -74,8 +74,21 @@ REGIONS = {1: REGION_1, 2: REGION_2, 3: REGION_3}
 # --- national differences worth knowing ----------------------------------
 # "replace" swaps an entry of the same name; "extra" adds one.
 COUNTRIES = {
+    # Licence-free allocations from the Czech general authorisations (VO-R),
+    # via kmitocty.cz. Ranges are the authorisation's own, not rounded.
     "CZ": dict(name="Czechia", region=1, extra=[
-        Band("Czech railway", 150.0, 160.0, "NFM", "shunting and station radio"),
+        Band("CB 27 MHz", 26.565, 27.405, "AM",
+             "VO-R/7, 80 channels AM, SSB on 1-40; at the tuner's bottom edge"),
+        Band("Shared VHF low", 34.050, 34.175, "NFM", "VO-R/16 shared channels"),
+        Band("Shared 77-81", 77.025, 81.750, "NFM", "VO-R/16 shared channels"),
+        Band("Shared digital 87", 87.430, 87.470, "NFM", "VO-R/16, just below FM"),
+        Band("Shared digital 149", 149.125, 149.250, "NFM", "VO-R/16"),
+        Band("Shared digital 155", 155.725, 156.150, "NFM", "VO-R/16"),
+        Band("Shared 172-173", 172.650, 173.050, "NFM", "VO-R/16 shared channels"),
+        Band("Shared 442", 442.200, 442.275, "NFM", "VO-R/16 shared channels"),
+        Band("Shared digital 448", 448.070, 448.170, "NFM", "VO-R/16"),
+        Band("Shared 448", 448.490, 448.610, "NFM", "VO-R/16 shared channels"),
+        Band("Shared 449", 449.770, 449.810, "NFM", "VO-R/16 shared channels"),
     ]),
     "SK": dict(name="Slovakia", region=1),
     "PL": dict(name="Poland", region=1),
@@ -171,3 +184,53 @@ def demod_for(freq_hz, code=DEFAULT_COUNTRY):
         if best.demod != "Off":
             return best.demod
     return "NFM"
+
+
+# --- named channels -------------------------------------------------------
+# Single frequencies worth jumping straight to. (name, MHz, demodulator)
+Channel = namedtuple("Channel", "name mhz demod")
+
+COMMON_CHANNELS = [
+    Channel("Emergency guard 121.5", 121.500, "AM"),
+    Channel("Military guard 243.0", 243.000, "AM"),
+    Channel("ACARS 131.550", 131.550, "AM"),
+    Channel("ACARS Europe 131.725", 131.725, "AM"),
+    Channel("Marine ch16 distress", 156.800, "NFM"),
+    Channel("NOAA-15 APT", 137.620, "NFM"),
+    Channel("NOAA-18 APT", 137.9125, "NFM"),
+    Channel("NOAA-19 APT", 137.100, "NFM"),
+    Channel("ADS-B 1090", 1090.000, "Off"),
+]
+
+# Czech ATC, from the airspace and frequency tables at kmitocty.cz
+CHANNELS = {
+    "CZ": [
+        Channel("Praha ATIS", 122.160, "AM"),
+        Channel("Praha TOWER", 134.560, "AM"),
+        Channel("Praha GROUND", 121.910, "AM"),
+        Channel("Praha DELIVERY", 120.060, "AM"),
+        Channel("Praha APRON", 121.710, "AM"),
+        Channel("Praha CTR", 118.310, "AM"),
+        Channel("Praha DEPARTURE", 120.530, "AM"),
+        Channel("Praha APPROACH", 127.580, "AM"),
+        Channel("Praha Radar West", 118.650, "AM"),
+        Channel("Praha Radar West FL125-305", 120.275, "AM"),
+        Channel("Praha Radar West FL305-355", 135.135, "AM"),
+        Channel("Praha Radar West FL355-375", 132.065, "AM"),
+        Channel("Praha Radar West FL375+", 133.530, "AM"),
+        Channel("Praha Radar South", 127.350, "AM"),
+        Channel("Praha Radar South FL125-305", 127.125, "AM"),
+        Channel("Praha Radar South FL305-355", 133.410, "AM"),
+        Channel("Praha Radar South FL355-375", 132.890, "AM"),
+        Channel("Praha Radar South FL375+", 134.590, "AM"),
+        Channel("Praha Radar North", 119.375, "AM"),
+        Channel("Praha Radar North FL125-305", 127.825, "AM"),
+        Channel("Praha Radar North FL305-355", 128.230, "AM"),
+        Channel("Praha Radar North FL355-375", 133.390, "AM"),
+        Channel("Praha Radar North FL375+", 132.805, "AM"),
+    ],
+}
+
+
+def channels_for(code):
+    return list(CHANNELS.get(code, [])) + list(COMMON_CHANNELS)

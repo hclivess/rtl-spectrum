@@ -1364,13 +1364,22 @@ class MainWindow(QMainWindow):
         return self.cb_country.currentData() or bp.DEFAULT_COUNTRY
 
     def _rebuild_band_list(self):
+        """
+        Bands and named channels share one combo: a country's ATC or weather
+        frequencies are the thing you actually want to jump to, and giving
+        them their own control would be one more box to read.
+        """
         self._bands = bp.bands_for(self.country())
+        self._channels = bp.channels_for(self.country())
         self.cb_band.blockSignals(True)
         self.cb_band.clear()
-        self.cb_band.addItem("- jump to a band -")
+        self.cb_band.addItem("- jump to a band or channel -")
         for b in self._bands:
             self.cb_band.addItem(f"{b.name}   {b.lo:g}-{b.hi:g}")
         self.cb_band.addItem("Full tuner range   24-1766")
+        self.cb_band.insertSeparator(self.cb_band.count())
+        for c in self._channels:
+            self.cb_band.addItem(f"{c.mhz:>9.4f}  {c.name}")
         self.cb_band.blockSignals(False)
 
     def _on_country_change(self, *_):
@@ -1383,16 +1392,31 @@ class MainWindow(QMainWindow):
     def _on_band_pick(self, idx):
         if idx <= 0:
             return
-        if idx - 1 < len(self._bands):
+        n_bands = len(self._bands)
+        if idx - 1 < n_bands:                            # a band: set the range
             b = self._bands[idx - 1]
             self.sp_start.setValue(b.lo)
             self.sp_stop.setValue(b.hi)
             self.sp_center.setValue(round((b.lo + b.hi) / 2, 4))
             if b.demod != "Off":
                 self.cb_demod.setCurrentText(b.demod)
-        else:
+        elif idx - 1 == n_bands:                         # full tuner range
             self.sp_start.setValue(24.0)
             self.sp_stop.setValue(1766.0)
+        else:                                            # a channel: tune it
+            ch_i = idx - n_bands - 3                     # skip full-range + separator
+            if 0 <= ch_i < len(self._channels):
+                c = self._channels[ch_i]
+                self.rb_live.setChecked(True)
+                self.sp_center.setValue(c.mhz)
+                self.cb_demod.setCurrentText(c.demod)
+                if c.demod == "Off":
+                    # a digital channel: audio would be meaningless here
+                    self.statusBar().showMessage(
+                        f"{c.name} - {c.mhz:.4f} MHz is digital; "
+                        f"use the Aircraft tab for 1090 MHz", 10000)
+                else:
+                    self.statusBar().showMessage(f"{c.name} - {c.mhz:.4f} MHz")
         self._update_band_label()
 
     def _log(self, widget, text):
