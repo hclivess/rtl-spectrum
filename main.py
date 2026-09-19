@@ -48,6 +48,7 @@ from dsp import (Demodulator, Deemphasis, FirDecimator, AudioSink, fft_decimate,
 from librtl import RtlSdr, RtlSdrError, device_count, device_name
 import airports
 import bandplan as bp
+import scanstore
 from adsb import AdsbDecoder
 from worldmap import MapWidget, radio_horizon_km
 from tiles import SOURCES as TILE_SOURCES
@@ -721,6 +722,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("no RTL-SDR found - check the WinUSB driver")
 
         self._build_menus()
+        self._refresh_saved_list()
         self._wire_live_controls()
         self._restore_settings()
 
@@ -930,6 +932,11 @@ class MainWindow(QMainWindow):
                                    "frequencies, so there is nothing to hunt for")
         self.b_airports.clicked.connect(self.on_airport_freqs)
         gf.addWidget(self.b_airports, 4, 0, 1, 2)
+        self.cb_saved = QComboBox()
+        self.cb_saved.setToolTip("Scans are kept, so a range you have already "
+                                 "swept can be brought back without the radio")
+        self.cb_saved.currentIndexChanged.connect(self.on_load_saved)
+        gf.addWidget(self.cb_saved, 5, 0, 1, 2)
         self.lst_found = QListWidget()
         self.lst_found.setFont(QFont("Consolas", 9))
         self.lst_found.setMinimumHeight(110)
@@ -1627,22 +1634,62 @@ class MainWindow(QMainWindow):
         self._play_after_find = True
         self.on_autofind()
 
-    @Slot(object)
-    def on_signals_found(self, hits):
+    def _refresh_saved_list(self):
+        self._saved = scanstore.all_scans()
+        self.cb_saved.blockSignals(True)
+        self.cb_saved.clear()
+        if self._saved:
+            self.cb_saved.addItem(f"- {len(self._saved)} saved scans -")
+            for sc in self._saved:
+                self.cb_saved.addItem(scanstore.label(sc))
+        else:
+            self.cb_saved.addItem("- no saved scans yet -")
+        self.cb_saved.blockSignals(False)
+
+    def on_load_saved(self, idx):
+        """Redraw a stored scan: its peaks and its trace, no tuning involved."""
+        if idx <= 0 or idx - 1 >= len(getattr(self, "_saved", [])):
+            return
+        sc = self._saved[idx - 1]
+        tf, td = sc.get("trace_freqs"), sc.get("trace_db")
+        if tf and td:
+            self.on_spectrum(np.asarray(tf, dtype=np.float64),
+                             np.asarray(td, dtype=np.float32))
+        # hits are stored in Hz, the same units the live path emits
+        self._show_hits([(f, snr) for f, snr in sc.get("hits", [])])
+        self.statusBar().showMessage(
+            f"saved scan {scanstore.label(sc)} - reloaded without tuning")
+
+    def _show_hits(self, hits):
+        """Render a set of hits, whether they came from the radio or a file."""
         self.found = hits
         self.lst_found.clear()
         for f, snr in sorted(hits, key=lambda t: -t[1]):
             lbl = bp.label_for(f, self.country())
-            self.lst_found.addItem(
-                f"{f/1e6:10.4f} MHz  {snr:5.1f} dB  {lbl}")
+            self.lst_found.addItem(f"{f/1e6:10.4f} MHz  {snr:5.1f} dB  {lbl}")
+        if not hits:
+            self.markers.setData([], [])
+            return
+        self.lst_found.setCurrentRow(0)
+        xs = [f for f, _ in hits]
+        ys = [0.0] * len(xs)
+        if self.last_trace is not None:
+            F, D = self.last_trace
+            ys = [float(D[int(np.argmin(np.abs(F - f)))]) for f in xs]
+        self.markers.setData(xs, ys)
+
+    @Slot(object)
+    def on_signals_found(self, hits):
         if hits:
-            self.lst_found.setCurrentRow(0)
-            xs = [f for f, _ in hits]
-            ys = [0 for _ in hits]
-            if self.last_trace is not None:
-                F, D = self.last_trace
-                ys = [float(D[int(np.argmin(np.abs(F - f)))]) for f in xs]
-            self.markers.setData(xs, ys)
+            F, D = self.last_trace if self.last_trace is not None else (None, None)
+            try:
+                scanstore.save(self.sp_start.value() * 1e6,
+                               self.sp_stop.value() * 1e6,
+                               self.cb_country.currentText(), hits, F, D)
+                self._refresh_saved_list()
+            except OSError:
+                pass
+        self._show_hits(hits)
         if getattr(self, "_play_after_find", False):
             self._play_after_find = False
             if hits:
@@ -2311,6 +2358,8 @@ class MainWindow(QMainWindow):
         a = m_file.addAction("Open recordings folder")
         a.triggered.connect(lambda: os.startfile(self._outdir)
                             if os.path.isdir(self._outdir) else None)
+        a = m_file.addAction("Forget saved scans")
+        a.triggered.connect(self._forget_scans)
         m_file.addSeparator()
         a = m_file.addAction("E&xit")
         a.triggered.connect(self.close)
@@ -2321,6 +2370,11 @@ class MainWindow(QMainWindow):
         m_help = mb.addMenu("&Help")
         a = m_help.addAction("&About")
         a.triggered.connect(self._about)
+
+    def _forget_scans(self):
+        scanstore.clear()
+        self._refresh_saved_list()
+        self.statusBar().showMessage("saved scans removed")
 
     def _rebuild_preset_menu(self):
         self.m_presets.clear()
