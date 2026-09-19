@@ -30,6 +30,7 @@ DEFAULT_REC_DIR = os.environ.get(
 
 DEFAULT_SETTINGS = {
     "mode": "live",
+    "auto_record": False,
     "center_mhz": 94.6,
     "start_mhz": 87.5,
     "stop_mhz": 108.0,
@@ -65,12 +66,12 @@ BUILTIN_PRESETS = {
         "listen": True, "sample_rate": "2.4", "gain": "49.6",
     },
     "Airband scan + record": {
-        "mode": "scan", "start_mhz": 118.0, "stop_mhz": 137.0,
+        "mode": "range", "auto_record": True, "start_mhz": 118.0, "stop_mhz": 137.0,
         "demod": "AM", "scan_step_khz": "25", "squelch_db": 8.0,
         "hang_s": 2.0, "skip_spurs": True,
     },
     "Whole-band survey": {
-        "mode": "sweep", "start_mhz": 24.0, "stop_mhz": 1766.0,
+        "mode": "range", "auto_record": False, "start_mhz": 24.0, "stop_mhz": 1766.0,
         "demod": "Off", "listen": False, "peak_hold": True,
     },
     "Aircraft (ADS-B)": {

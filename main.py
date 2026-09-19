@@ -746,45 +746,46 @@ class MainWindow(QMainWindow):
         pl.setContentsMargins(0, 0, 0, 0)
         pl.setSpacing(8)
 
-        # ---------------------------------------------------------- mode --
-        gb_mode = QGroupBox("What to do")
-        gm = QVBoxLayout(gb_mode)
-        self.rb_live = QRadioButton("Listen to one frequency")
-        self.rb_sweep = QRadioButton("Sweep a range")
-        self.rb_scan = QRadioButton("Scan a range and auto-record")
-        self.rb_live.setChecked(True)
-        grp = QButtonGroup(self)
-        for rb in (self.rb_live, self.rb_sweep, self.rb_scan):
-            grp.addButton(rb)
-            gm.addWidget(rb)
-            rb.toggled.connect(self._on_mode_change)
-        pl.addWidget(gb_mode)
-
         # -------------------------------------------------------- tuning --
+        # One frequency, or a range. That is the only thing that changes what
+        # the receiver does; recording is a separate switch, because wanting
+        # to record is orthogonal to what you are listening to.
         gb_tune = QGroupBox("Frequency")
         gt = QGridLayout(gb_tune)
+        self.rb_live = QRadioButton("One frequency")
+        self.rb_range = QRadioButton("A range")
+        self.rb_live.setChecked(True)
+        grp = QButtonGroup(self)
+        row_modes = QWidget()
+        rm = QHBoxLayout(row_modes)
+        rm.setContentsMargins(0, 0, 0, 0)
+        for rb in (self.rb_live, self.rb_range):
+            grp.addButton(rb)
+            rm.addWidget(rb)
+            rb.toggled.connect(self._on_mode_change)
+        gt.addWidget(row_modes, 0, 0, 1, 2)
         self.lbl_center = QLabel("Tune to MHz")
-        gt.addWidget(self.lbl_center, 0, 0)
+        gt.addWidget(self.lbl_center, 1, 0)
         self.sp_center = QDoubleSpinBox()
         self.sp_center.setRange(24, 1766)
         self.sp_center.setDecimals(4)
         self.sp_center.setSingleStep(0.025)
         self.sp_center.setValue(94.6)
-        gt.addWidget(self.sp_center, 0, 1)
+        gt.addWidget(self.sp_center, 1, 1)
         self.lbl_from = QLabel("From MHz")
-        gt.addWidget(self.lbl_from, 1, 0)
+        gt.addWidget(self.lbl_from, 2, 0)
         self.sp_start = QDoubleSpinBox()
         self.sp_start.setRange(24, 1766)
         self.sp_start.setDecimals(3)
         self.sp_start.setValue(87.5)
-        gt.addWidget(self.sp_start, 1, 1)
+        gt.addWidget(self.sp_start, 2, 1)
         self.lbl_to = QLabel("To MHz")
-        gt.addWidget(self.lbl_to, 2, 0)
+        gt.addWidget(self.lbl_to, 3, 0)
         self.sp_stop = QDoubleSpinBox()
         self.sp_stop.setRange(24, 1766)
         self.sp_stop.setDecimals(3)
         self.sp_stop.setValue(108.0)
-        gt.addWidget(self.sp_stop, 2, 1)
+        gt.addWidget(self.sp_stop, 3, 1)
         self.cb_country = QComboBox()
         for code, nm in bp.country_names():
             self.cb_country.addItem(nm, code)
@@ -794,16 +795,16 @@ class MainWindow(QMainWindow):
         self.cb_country.setToolTip("Band plans differ by country: FM is 76-95 in "
                                    "Japan, licence-free UHF is different everywhere")
         self.cb_country.currentIndexChanged.connect(self._on_country_change)
-        gt.addWidget(QLabel("Band plan"), 3, 0)
-        gt.addWidget(self.cb_country, 3, 1)
+        gt.addWidget(QLabel("Band plan"), 4, 0)
+        gt.addWidget(self.cb_country, 4, 1)
         self.cb_band = QComboBox()
         self.cb_band.currentIndexChanged.connect(self._on_band_pick)
-        gt.addWidget(self.cb_band, 4, 0, 1, 2)
+        gt.addWidget(self.cb_band, 5, 0, 1, 2)
         self.lbl_band = QLabel("-")
         self.lbl_band.setWordWrap(True)
         self.lbl_band.setFont(QFont("Consolas", 9))
         self.lbl_band.setStyleSheet(f"color: {theme.ACCENT};")
-        gt.addWidget(self.lbl_band, 5, 0, 1, 2)
+        gt.addWidget(self.lbl_band, 6, 0, 1, 2)
         for wdg in (self.sp_center, self.sp_start, self.sp_stop):
             wdg.valueChanged.connect(self._update_band_label)
         pl.addWidget(gb_tune)
@@ -954,11 +955,17 @@ class MainWindow(QMainWindow):
         self.b_csv.clicked.connect(self.on_save_csv)
         self.b_png = QPushButton("Chart PNG")
         self.b_png.clicked.connect(self.on_save_png)
-        gc.addWidget(self.b_wav, 0, 0)
-        gc.addWidget(self.b_iq, 0, 1)
-        gc.addWidget(self.b_csv, 1, 0)
-        gc.addWidget(self.b_png, 1, 1)
-        self.sec_rec = theme.Collapsible("Record to file", gb_rec)
+        self.ck_autorec = QCheckBox("Auto-record every channel that opens")
+        self.ck_autorec.setToolTip(
+            "Over a range: stop on any channel above squelch, record it to its "
+            "own file until it goes quiet, then carry on")
+        self.ck_autorec.toggled.connect(self._on_mode_change)
+        gc.addWidget(self.ck_autorec, 0, 0, 1, 2)
+        gc.addWidget(self.b_wav, 1, 0)
+        gc.addWidget(self.b_iq, 1, 1)
+        gc.addWidget(self.b_csv, 2, 0)
+        gc.addWidget(self.b_png, 2, 1)
+        self.sec_rec = theme.Collapsible("Record", gb_rec, opened=True)
         pl.addWidget(self.sec_rec)
 
         self.lbl_cursor = QLabel("-")
@@ -1069,20 +1076,30 @@ class MainWindow(QMainWindow):
             self.lbl_band.setText(
                 f"{lo:.3f} – {hi:.3f} MHz  ({hi - lo:.3f} wide)\n{covers}")
 
+    def scanning(self):
+        """A range with auto-record on is what the scanner is."""
+        return self.rb_range.isChecked() and self.ck_autorec.isChecked()
+
     def _on_mode_change(self, *_):
-        """Show only the fields the selected mode actually uses."""
+        """Show only the fields the current choice actually uses."""
         live = self.rb_live.isChecked()
-        scan = self.rb_scan.isChecked()
+        scan = self.scanning()
         self.lbl_center.setVisible(live)
         self.sp_center.setVisible(live)
         for w in (self.lbl_from, self.sp_start, self.lbl_to, self.sp_stop):
             w.setVisible(not live)
-        if hasattr(self, 'sec_scan'):
+        if hasattr(self, "sec_scan"):
             self.sec_scan.setVisible(scan)
+        if hasattr(self, "ck_autorec"):
+            self.ck_autorec.setEnabled(not live)
+            if live and self.ck_autorec.isChecked():
+                self.ck_autorec.setChecked(False)
+        # recording by hand is for one frequency; over a range the scanner
+        # writes the files itself
         self.b_iq.setEnabled(not scan)
         self.b_wav.setEnabled(not scan)
-        self.b_start.setText("Start scanning" if scan else
-                             ("Start sweep" if self.rb_sweep.isChecked() else "Listen"))
+        self.b_start.setText("Scan and record" if scan else
+                             ("Sweep" if self.rb_range.isChecked() else "Listen"))
         self._update_band_label()
 
     def _tab_aircraft(self):
@@ -1434,9 +1451,9 @@ class MainWindow(QMainWindow):
     def on_start(self, find_mode=False):
         if self._busy():
             return
-        if self.rb_scan.isChecked() and not find_mode:
+        if self.scanning() and not find_mode:
             return self.on_scan_start()
-        sweep = find_mode or self.rb_sweep.isChecked()
+        sweep = find_mode or self.rb_range.isChecked()
         if sweep and self.sp_stop.value() <= self.sp_start.value():
             QMessageBox.warning(self, "Bad span", "Sweep stop must be above sweep start.")
             return
@@ -2201,7 +2218,7 @@ class MainWindow(QMainWindow):
         self.b_start.setEnabled(not running)
         # Mode and frequency are locked while a job runs: letting them change
         # leaves the panel describing something other than what is on the air.
-        for wdg in (self.rb_live, self.rb_sweep, self.rb_scan, self.cb_band,
+        for wdg in (self.rb_live, self.rb_range, self.ck_autorec, self.cb_band,
                     self.cb_country, self.sp_center, self.sp_start, self.sp_stop):
             wdg.setEnabled(not running)
 
@@ -2209,7 +2226,8 @@ class MainWindow(QMainWindow):
     def _widget_map(self):
         """Every setting key -> the widget that owns it. No hidden state."""
         return {
-            "mode": (self.rb_live, self.rb_sweep, self.rb_scan),
+            "mode": (self.rb_live, self.rb_range),
+            "auto_record": self.ck_autorec,
             "center_mhz": self.sp_center,
             "start_mhz": self.sp_start,
             "stop_mhz": self.sp_stop,
@@ -2240,8 +2258,7 @@ class MainWindow(QMainWindow):
         out = {}
         for key, w in self._widget_map().items():
             if key == "mode":
-                out[key] = ("live" if self.rb_live.isChecked() else
-                            "sweep" if self.rb_sweep.isChecked() else "scan")
+                out[key] = "live" if self.rb_live.isChecked() else "range"
             elif isinstance(w, QComboBox):
                 out[key] = w.currentText()
             elif isinstance(w, (QSpinBox, QDoubleSpinBox)):
@@ -2258,8 +2275,9 @@ class MainWindow(QMainWindow):
             v = data[key]
             try:
                 if key == "mode":
-                    {"live": self.rb_live, "sweep": self.rb_sweep,
-                     "scan": self.rb_scan}.get(v, self.rb_live).setChecked(True)
+                    {"live": self.rb_live, "range": self.rb_range,
+                     "sweep": self.rb_range,
+                     "scan": self.rb_range}.get(v, self.rb_live).setChecked(True)
                 elif isinstance(w, QComboBox):
                     i = w.findText(str(v))
                     if i < 0:
