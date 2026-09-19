@@ -377,6 +377,11 @@ class ScannerWorker(QThread):
         self._last_spec = 0.0
         self._mon_dm = None
         self._mon_ch = None
+        self.gain = "49.6"
+        self.ppm = 65
+        self.demod = "AM"
+        self.device = 0
+        self.out_dir = DEFAULT_REC_DIR
 
     def _monitor_audio(self, iq, off_hz, ch):
         """
@@ -399,11 +404,6 @@ class ScannerWorker(QThread):
         if peak > 1e-9:
             aud = aud / max(peak, 0.02) * 0.45
         self.audio.emit(aud)
-        self.gain = "49.6"
-        self.ppm = 65
-        self.demod = "AM"
-        self.device = 0
-        self.out_dir = DEFAULT_REC_DIR
 
     def stop(self):
         self._run = False
@@ -2742,7 +2742,70 @@ def selftest():
     return 0
 
 
+def run_headless(argv):
+    """
+    Unattended scanning with no window: --scan FROM TO [hours].
+
+    The point of a squelch-gated recorder is to be left alone, and needing a
+    GUI session open all night defeats that. Everything else is the same code
+    the window drives.
+    """
+    from PySide6.QtCore import QCoreApplication
+
+    f0 = float(argv[0]) * 1e6
+    f1 = float(argv[1]) * 1e6
+    hours = float(argv[2]) if len(argv) > 2 else 8.0
+    out = os.environ.get("RTLSDR_REC_DIR", DEFAULT_REC_DIR)
+
+    app = QCoreApplication(sys.argv)
+    sc = ScannerWorker()
+    sc.f_start, sc.f_stop = f0, f1
+    sc.step = float(os.environ.get("RTLSPECTRUM_STEP_HZ", 8333.0))
+    sc.demod = os.environ.get("RTLSPECTRUM_DEMOD", "AM")
+    sc.squelch = float(os.environ.get("RTLSPECTRUM_SQUELCH", 8.0))
+    sc.gain = os.environ.get("RTLSPECTRUM_GAIN", "49.6")
+    sc.ppm = int(os.environ.get("RTLSPECTRUM_PPM", "65"))
+    sc.out_dir = out
+    sc.monitor = False                      # nobody is listening at 3 a.m.
+
+    kept = []
+    sc.logline.connect(lambda t: print(t, flush=True))
+    sc.status.connect(lambda t: print(f"  {t}", flush=True))
+    sc.failed.connect(lambda t: print(f"FAILED: {t}", flush=True))
+    sc.recorded.connect(lambda p, f, d: kept.append((p, f, d)))
+
+    best = [0.0, 0.0]
+
+    def note(freq, snr, _centre):
+        if snr > best[0] and not sc.is_spur(freq):
+            best[0], best[1] = snr, freq
+    sc.sweepState.connect(note)
+
+    print(f"scanning {f0/1e6:.3f}-{f1/1e6:.3f} MHz for {hours:.1f} h, "
+          f"squelch {sc.squelch:.0f} dB, saving to {out}", flush=True)
+    sc.start()
+    end = time.time() + hours * 3600
+    last = 0.0
+    while time.time() < end and sc.isRunning():
+        app.processEvents()
+        time.sleep(0.05)
+        if time.time() - last > 900:        # a heartbeat every 15 minutes
+            last = time.time()
+            print(f"{datetime.now():%H:%M:%S}  alive - {len(kept)} kept, "
+                  f"best {best[1]/1e6:.4f} MHz at {best[0]:.1f} dB", flush=True)
+    sc.stop()
+    sc.wait(10000)
+    app.processEvents()
+    print(f"\ndone: {len(kept)} recordings kept", flush=True)
+    for p, f, d in kept:
+        print(f"  {f/1e6:9.4f} MHz  {d:5.1f}s  {os.path.basename(p)}", flush=True)
+    return 0
+
+
 def main():
+    if len(sys.argv) > 2 and sys.argv[1] == "--scan":
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        sys.exit(run_headless(sys.argv[2:]))
     if SELFTEST:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         sys.exit(selftest())
