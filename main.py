@@ -384,7 +384,8 @@ class ScannerWorker(QThread):
             return
         t = np.arange(len(iq), dtype=np.float64)
         mix = (iq * np.exp(-2j * np.pi * off_hz * t / SCAN_FS)).astype(np.complex64)
-        if self._mon_dm is None or self._mon_ch != ch:
+        if (self._mon_dm is None or self._mon_ch != ch
+                or self._mon_dm.mode != self.demod):
             self._mon_dm = Demodulator(SCAN_FS, self.demod)
             self._mon_ch = ch
         aud = self._mon_dm(mix, normalise=False)
@@ -720,6 +721,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("no RTL-SDR found - check the WinUSB driver")
 
         self._build_menus()
+        self._wire_live_controls()
         self._restore_settings()
 
         self.age_timer = QTimer(self)
@@ -1490,6 +1492,48 @@ class MainWindow(QMainWindow):
             self.scanner.wait(8000)
         self._spectrum_finished()
         self._scan_finished()
+
+    def _wire_live_controls(self):
+        """
+        Controls that take effect while something is running.
+
+        Everything here is read by the worker on each block, so writing the
+        attribute is enough; only the mode and the tuning need a restart, and
+        those are locked while a job runs.
+        """
+        self.ck_listen.toggled.connect(self._on_listen_toggled)
+        self.cb_demod.currentTextChanged.connect(self._on_demod_changed)
+        self.sp_squelch.valueChanged.connect(
+            lambda v: self._set_scanner("squelch", v))
+        self.sp_hang.valueChanged.connect(
+            lambda v: self._set_scanner("hang", v))
+        self.sp_minlen.valueChanged.connect(
+            lambda v: self._set_scanner("min_len", v))
+        self.ck_spurs.toggled.connect(
+            lambda v: self._set_scanner("skip_spurs", v))
+
+    def _set_scanner(self, attr, value):
+        if self.scanner and self.scanner.isRunning():
+            setattr(self.scanner, attr, value)
+
+    def _on_listen_toggled(self, on):
+        running = bool((self.worker and self.worker.isRunning()) or
+                       (self.scanner and self.scanner.isRunning()))
+        if on and running and self._audio_out is None:
+            self._open_audio()
+        elif not on:
+            self._close_audio()
+        self._set_scanner("monitor", on)
+
+    def _on_demod_changed(self, mode):
+        # the worker rebuilds its Demodulator when the mode name changes
+        if self.worker and self.worker.isRunning():
+            self.worker.demod = mode
+        self._set_scanner("demod", mode)
+        if mode == "Off":
+            self._close_audio()
+        elif self.ck_listen.isChecked():
+            self._on_listen_toggled(True)
 
     def _refresh_state_pill(self):
         """The header reports what is actually running, never what we assumed."""
