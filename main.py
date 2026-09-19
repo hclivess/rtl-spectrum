@@ -1105,8 +1105,14 @@ class MainWindow(QMainWindow):
         # writes the files itself
         self.b_iq.setEnabled(not scan)
         self.b_wav.setEnabled(not scan)
-        self.b_start.setText("Scan and record" if scan else
-                             ("Sweep" if self.rb_range.isChecked() else "Listen"))
+        # The button is Start. It was relabelled Listen / Sweep / Scan, which
+        # contradicted the Listen checkbox sitting right above it: you could
+        # untick Listen and the button still said Listen. What it will do goes
+        # in the tooltip, where it cannot argue with a control.
+        self.b_start.setToolTip(
+            "Scan the range and record every channel that opens" if scan else
+            ("Sweep the range and draw the spectrum" if self.rb_range.isChecked()
+             else "Tune this frequency and start receiving"))
         self._update_band_label()
 
     def _tab_aircraft(self):
